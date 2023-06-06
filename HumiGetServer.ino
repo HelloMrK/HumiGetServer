@@ -6,101 +6,116 @@
 #include <WiFiUdp.h>
 #include <TimeLib.h>
 
-// 替换为您的网络凭据和静态IP地址
-const char* ssid = "1202"; // 你的WiFi名称，中文需要转换为UTF-8编码
-const char* password = "1234567890"; // 你的WiFi密码
-//IPAddress staticIP(192, 168, 43, 222); // 静态IP地址
-//IPAddress gateway(192, 168, 43, 1); // 网关
-//IPAddress subnet(255, 255, 255, 0); // 子网掩码
-
-ESP8266WebServer server(80); // 创建一个Web服务器对象，监听端口80
+const char* ssid = "xxx"; // 替换为你的WiFi名称
+const char* password = "xxxxxxxx"; // 替换为你的WiFi密码
+const int SERVER_PORT = 80; // 定义服务器端口常量
+const char* NTP_SERVER = "pool.ntp.org"; // 定义NTP服务器地址常量
+ESP8266WebServer server(SERVER_PORT); // 创建一个Web服务器对象，监听端口80
 int ASignal = A0;
 
 WiFiUDP udp;
-NTPClient timeClient(udp, "pool.ntp.org");
+NTPClient timeClient(udp, NTP_SERVER);
 
-void handleRoot() {
+// 读取土壤湿度
+float readSoilMoisture() {
   int sensorValue = analogRead(A0);
   float percentageValue = 100 - ((float)sensorValue / 1024.0) * 100.0;
-
-  // 将 percentageValue 保留两位小数
   double formattedPercentageValue = round(percentageValue * 100.0) / 100.0;
+  return formattedPercentageValue;
+}
 
-  // 创建一个 JSON 缓冲区
-  StaticJsonDocument<200> jsonBuffer;
-  
-  // 创建一个空的 JSON 对象
-  JsonObject json = jsonBuffer.to<JsonObject>();
-  
-  // 将 sensorValue 和 percentageValue 添加到 JSON 对象中
-  json["sensorValue"] = sensorValue;
-  json["percentageValue"] = formattedPercentageValue;
-  
-  // 获取当前时间
+// 读取当前时间
+String getCurrentTime() {
   timeClient.update();
   unsigned long epochTime = timeClient.getEpochTime();
-
-  // 将时间戳转换为时间结构体
   struct tm *tm;
   time_t t = epochTime;
   tm = localtime(&t);
-
-  // 手动调整时区偏移量为+8时区（东八区）
   tm->tm_hour += 8;
   mktime(tm);
-
-  // 创建一个字符数组存储格式化后的时间
   char formattedTime[20];
   strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S", tm);
-
-  // 将格式化后的时间添加到JSON对象中
-  json["currentTime"] = formattedTime;
-  
-  // 将 JSON 对象转换为字符串
-  String jsonString;
-  serializeJson(json, jsonString);
-  
-  server.send(200, "application/json", jsonString); // 响应请求，并设置内容类型为JSON
+  return String(formattedTime);
 }
 
+// 组装响应
+String createResponse(float soilMoisture, const String& currentTime) {
+  StaticJsonDocument<200> jsonBuffer;
+  JsonObject json = jsonBuffer.to<JsonObject>();
+  json["sensorValue"] = soilMoisture;
+  json["percentageValue"] = soilMoisture;
+  json["currentTime"] = currentTime;
 
+  String jsonString;
+  serializeJson(json, jsonString);
+  return jsonString;
+}
 
-void setup() {
-  Serial.begin(115200);
-  
-  // 连接到Wi-Fi网络
+// 处理根路径请求
+void handleRoot() {
+  float soilMoisture = readSoilMoisture();
+  String currentTime = getCurrentTime();
+  String response = createResponse(soilMoisture, currentTime);
+
+  server.send(200, "application/json", response);
+}
+
+// 连接到WiFi网络
+void connectToWiFi() {
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
     Serial.println("Connecting to WiFi...");
   }
-  
-  // 设置静态IP地址
-//  WiFi.config(staticIP, gateway, subnet);
-  
-  // 初始化mDNS服务
-  if (MDNS.begin("esphumisensor")) {
-    Serial.println("MDNS responder started");
-  }
-  
   Serial.println("Connected to WiFi");
   Serial.print("当前IP地址: ");
   Serial.println(WiFi.localIP());
+}
 
-  // 处理根路径请求
-  server.on("/", handleRoot);
-  
-  // 开始服务器
-  server.begin();
+// 初始化mDNS服务
+void initializeMDNS() {
+  if (MDNS.begin("esphumisensor")) {
+    Serial.println("MDNS responder started");
+  }
+}
 
-  // 初始化NTP客户端
+// 初始化NTP客户端
+void initializeNTPClient() {
   timeClient.begin();
-  
+}
+
+// 设置静态IP地址
+void setStaticIP() {
+  IPAddress staticIP(192, 168, 1, 100);
+  IPAddress gateway(192, 168, 1, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  WiFi.config(staticIP, gateway, subnet);
+}
+
+// 开始Web服务器
+void startWebServer() {
+  server.on("/", handleRoot);
+  server.begin();
   Serial.println("HTTP server started");
-  pinMode(ASignal, INPUT);       
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  connectToWiFi();
+
+  // 设置静态IP地址（可选）
+  // setStaticIP();
+  
+  initializeMDNS();
+
+  pinMode(ASignal, INPUT);
+
+  initializeNTPClient();
+
+  startWebServer();
 }
 
 void loop() {
-  // 处理客户端请求
   server.handleClient();
 }
